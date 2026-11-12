@@ -87,6 +87,34 @@
       letter-spacing: -0.03em;
     }
 
+    /* 접근 코드는 입력 여부만 보이도록 비밀번호 마스킹 처리 */
+    #accessCode {
+      color: #111111 !important;
+      -webkit-text-fill-color: #111111 !important;
+      caret-color: #111111 !important;
+      opacity: 1 !important;
+      background: #ffffff !important;
+      font-size: 17px;
+      font-weight: 600;
+    }
+    #accessCode::placeholder {
+      color: #777777 !important;
+      -webkit-text-fill-color: #777777 !important;
+      opacity: 1;
+    }
+    #accessCode:-webkit-autofill {
+      -webkit-text-fill-color: #111111 !important;
+      caret-color: #111111 !important;
+      box-shadow: 0 0 0 1000px #ffffff inset !important;
+    }
+    .code-input-feedback {
+      margin-top: 7px;
+      font-size: 13px;
+      color: #444444;
+      min-height: 20px;
+      overflow-wrap: anywhere;
+    }
+
     .input-row {
       display: flex;
       gap: 10px;
@@ -398,9 +426,11 @@
       </div>
 
       <div class="input-row">
-        <input id="accessCode" type="password" placeholder="접근 코드를 입력하세요" autocomplete="off" inputmode="text" enterkeyhint="go" />
+        <input id="accessCode" type="password" placeholder="접근 코드를 입력하세요" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" lang="en" inputmode="text" enterkeyhint="go" />
         <button type="button" class="btn-primary" onclick="login()">로그인</button>
       </div>
+
+      <div id="codeInputFeedback" class="code-input-feedback" aria-live="polite">접근 코드를 입력하면 * 표시로 나타납니다.</div>
 
       <div class="button-grid">
         <button type="button" class="btn-soft" onclick="adminLogin()">관리자</button>
@@ -586,9 +616,15 @@
     let currentLoginCode = "";
     let accessCodesCache = [];
     let accessCodesLoaded = false;
+    let loginAttempt = 0;
 
     const INITIAL_ACCESS_CODES = ["1234", "guswls1"];
     const ADMIN_CODE = "ychj561!@&";
+    const SUB_ADMIN_CODE = "wnsgml3179";
+
+    function isAdminCode(code) {
+      return code === ADMIN_CODE || code === SUB_ADMIN_CODE;
+    }
 
     // Firebase 설정값을 Firebase Console에서 복사해 아래에 붙여넣으세요.
     // 필수값: apiKey, projectId
@@ -666,7 +702,7 @@
         const data = await response.json();
         const codes = decodeFirestoreCodes(data);
 
-        accessCodesCache = codes.length ? codes : normalizeCodes(INITIAL_ACCESS_CODES);
+        accessCodesCache = codes;
         accessCodesLoaded = true;
         setFirebaseStatus("Firebase 연결 완료 · 로그인 코드 목록을 서버에서 불러왔습니다.");
         return accessCodesCache;
@@ -681,10 +717,9 @@
 
     async function saveAccessCodesToFirebase(codes) {
       const normalized = normalizeCodes(codes);
-      accessCodesCache = normalized;
-      localStorage.setItem("accessCodesLocalBackup", JSON.stringify(normalized));
-
       if (!isFirebaseConfigured()) {
+        accessCodesCache = normalized;
+        localStorage.setItem("accessCodesLocalBackup", JSON.stringify(normalized));
         setFirebaseStatus("Firebase 설정값이 없어 서버 저장은 되지 않았습니다. Firebase 설정값을 입력해야 모든 기기에서 공유됩니다.");
         return false;
       }
@@ -702,6 +737,8 @@
         throw new Error(`Firestore 저장 실패: ${response.status} ${text}`);
       }
 
+      accessCodesCache = normalized;
+      localStorage.setItem("accessCodesLocalBackup", JSON.stringify(normalized));
       localStorage.setItem("accessCodesLastSyncedAt", new Date().toISOString());
       localStorage.setItem("accessCodesSyncedSnapshot", JSON.stringify(normalized));
       setFirebaseStatus("Firebase 서버 동기화 완료 · 모든 기기에서 같은 로그인 코드 목록을 사용합니다.");
@@ -724,7 +761,7 @@
     }
 
     async function ensureAccessCodesLoaded() {
-      if (accessCodesLoaded && accessCodesCache.length) {
+      if (accessCodesLoaded) {
         return accessCodesCache;
       }
 
@@ -732,7 +769,7 @@
     }
 
     function getAllAccessCodes() {
-      return accessCodesCache.length ? accessCodesCache : getLocalAccessCodesFallback();
+      return accessCodesLoaded ? accessCodesCache : getLocalAccessCodesFallback();
     }
 
     async function saveAllAccessCodes(codes) {
@@ -809,7 +846,9 @@
       if (!currentLoginCode || currentLoginCode === "admin") return false;
 
       const noteData = data || collectFormData();
-      localStorage.setItem(getNoteKey(), JSON.stringify(noteData));
+      const savedCode = currentLoginCode;
+      const noteKey = getNoteKey();
+      localStorage.setItem(noteKey, JSON.stringify(noteData));
 
       if (!isFirebaseConfigured()) {
         if (!silent) showToast("Firebase 설정이 없어 현재 브라우저에만 저장되었습니다.");
@@ -817,7 +856,7 @@
       }
 
       try {
-        const response = await fetch(getFirestoreNoteDocUrl(currentLoginCode), {
+        const response = await fetch(getFirestoreNoteDocUrl(savedCode), {
           method: "PATCH",
           headers: {
             "Content-Type": "application/json"
@@ -830,8 +869,8 @@
           throw new Error(`Note 저장 실패: ${response.status} ${text}`);
         }
 
-        localStorage.setItem(getNoteKey(), JSON.stringify(noteData));
-        localStorage.setItem(getNoteKey() + ":lastSyncedAt", new Date().toISOString());
+        localStorage.setItem(noteKey, JSON.stringify(noteData));
+        localStorage.setItem(noteKey + ":lastSyncedAt", new Date().toISOString());
 
         if (!silent) showToast("Firebase에 Note 내용이 저장되었습니다.");
         return true;
@@ -852,7 +891,7 @@
       }
 
       try {
-        const response = await fetch(getFirestoreNoteDocUrl(currentLoginCode), {
+        const response = await fetch(getFirestoreNoteDocUrl(savedCode), {
           method: "DELETE"
         });
 
@@ -919,7 +958,9 @@
       "이주영",
       "김기덕",
       "김두영",
-      "이지호"
+      "이지호",
+      "고헌주",
+      "이창순"
     ];
 
     const VIDEO_PD_VJ = [
@@ -940,34 +981,55 @@
       "황주연",
       "김민승",
       "정영진",
-      "나경운"
+      "나경운",
+      "최우혁",
+      "신선우"
     ];
 
     async function login() {
+      const attempt = ++loginAttempt;
       const codeInput = document.getElementById("accessCode");
-      const code = codeInput.value.trim();
-      const codes = await ensureAccessCodesLoaded();
+      const code = koreanKeysToEnglish(codeInput.value).trim();
+      codeInput.value = code;
+      const feedback = document.getElementById("codeInputFeedback");
+      if (feedback) feedback.textContent = code ? `입력 중: ${"*".repeat(code.length)}` : "접근 코드를 입력하면 * 표시로 나타납니다.";
 
+      // Enter 및 '로그인' 버튼은 일반 사용자 로그인만 처리합니다.
+      if (!code) {
+        showToast("접근 코드를 입력하세요.");
+        return;
+      }
+      if (isAdminCode(code)) {
+        showToast("관리자 접속은 관리자 버튼을 눌러주세요.");
+        return;
+      }
+
+      const codes = await ensureAccessCodesLoaded();
+      if (attempt !== loginAttempt) return;
       if (codes.includes(code)) {
         currentLoginCode = code;
         document.getElementById("loginPage").classList.add("hidden");
         document.getElementById("mainPage").classList.remove("hidden");
         showPanel("formPanel");
+        fillFormData({});
+        updatePreview();
         await loadSavedNote();
         updatePreview();
-      } else if (code === ADMIN_CODE) {
-        showToast("관리자 접속은 관리자 버튼을 눌러주세요.");
       } else {
         showToast("접근 코드가 맞지 않습니다.");
       }
     }
 
     async function adminLogin() {
-      const code = document.getElementById("accessCode").value.trim();
+      const attempt = ++loginAttempt;
+      const input = document.getElementById("accessCode");
+      const code = koreanKeysToEnglish(input.value).trim();
+      input.value = code;
 
-      if (code === ADMIN_CODE) {
+      if (isAdminCode(code)) {
         currentLoginCode = "admin";
         await ensureAccessCodesLoaded();
+        if (attempt !== loginAttempt) return;
         document.getElementById("loginPage").classList.add("hidden");
         document.getElementById("mainPage").classList.remove("hidden");
         showPanel("adminPanel");
@@ -981,10 +1043,15 @@
     }
 
     function logout() {
+      ++loginAttempt;
+      clearTimeout(noteAutoSaveTimer);
+      noteAutoSaveTimer = null;
       currentLoginCode = "";
       document.getElementById("mainPage").classList.add("hidden");
       document.getElementById("loginPage").classList.remove("hidden");
       document.getElementById("accessCode").value = "";
+      const feedback = document.getElementById("codeInputFeedback");
+      if (feedback) feedback.textContent = "접근 코드를 입력하면 * 표시로 나타납니다.";
     }
 
     function openPublicSection(panel) {
@@ -1112,11 +1179,13 @@
     async function resetForm() {
       if (!confirm("현재 로그인 코드로 저장된 Note 내용을 초기화하시겠습니까?")) return;
 
+      clearTimeout(noteAutoSaveTimer);
+      noteAutoSaveTimer = null;
       fillFormData({});
       localStorage.removeItem(getNoteKey());
-      await deleteNoteFromFirebase();
+      const deleted = await deleteNoteFromFirebase();
       updatePreview();
-      showToast("현재 로그인 코드의 Note 내용이 초기화되었습니다.");
+      showToast(deleted ? "Note 내용이 초기화되었습니다." : "브라우저 내용은 초기화되었습니다. 서버 삭제 여부를 확인하세요.");
     }
 
     async function copyContent() {
@@ -1378,7 +1447,7 @@
         return;
       }
 
-      if (newCode === ADMIN_CODE) {
+      if (isAdminCode(newCode)) {
         showToast("관리자 코드는 일반 로그인 코드로 추가할 수 없습니다.");
         return;
       }
@@ -1391,8 +1460,7 @@
       }
 
       try {
-        codes.push(newCode);
-        await saveAllAccessCodes(codes);
+        if (!await saveAllAccessCodes([...codes, newCode])) throw new Error("서버에 저장하지 못했습니다.");
         input.value = "";
         renderAccessCodes();
         showToast("로그인 코드가 Firebase에 추가되었습니다.");
@@ -1413,8 +1481,7 @@
       if (!confirm(`로그인 코드 "${codes[index]}"를 삭제하시겠습니까?`)) return;
 
       try {
-        codes.splice(index, 1);
-        await saveAllAccessCodes(codes);
+        if (!await saveAllAccessCodes(codes.filter((_, i) => i !== index))) throw new Error("서버에서 삭제하지 못했습니다.");
         renderAccessCodes();
         showToast("로그인 코드가 Firebase에서 삭제되었습니다.");
       } catch (error) {
@@ -1447,14 +1514,14 @@
         const merged = normalizeCodes([
           ...firebaseCodes,
           ...localCandidates
-        ]).filter(code => code !== ADMIN_CODE);
+        ]).filter(code => !isAdminCode(code));
 
         if (!localCandidates.length) {
           showToast("가져올 기존 로그인 코드가 없습니다.");
           return;
         }
 
-        await saveAllAccessCodes(merged);
+        if (!await saveAllAccessCodes(merged)) throw new Error("서버에 저장하지 못했습니다.");
         renderAccessCodes();
         showToast("기존 로그인 코드를 Firebase로 가져왔습니다.");
       } catch (error) {
@@ -1465,13 +1532,23 @@
 
     async function syncAccessCodes() {
       try {
-        const codes = await ensureAccessCodesLoaded();
-        await saveAllAccessCodes(codes);
+        // 저장 중인 목록으로 서버 데이터를 덮어쓰지 않고 최신 목록을 조회합니다.
+        if (!isFirebaseConfigured()) {
+          showToast("Firebase 설정을 확인하세요.");
+          return;
+        }
+        const response = await fetch(getFirestoreDocUrl());
+        if (!response.ok) throw new Error(`Firestore 동기화 실패: ${response.status}`);
+        const data = await response.json();
+        accessCodesCache = decodeFirestoreCodes(data);
+        accessCodesLoaded = true;
+        localStorage.setItem("accessCodesLocalBackup", JSON.stringify(accessCodesCache));
         renderAccessCodes();
-        showToast("서버 동기화가 완료되었습니다.");
+        setFirebaseStatus("Firebase 서버에서 최신 로그인 코드 목록을 불러왔습니다.");
+        showToast("최신 서버 목록을 불러왔습니다.");
       } catch (error) {
         console.error(error);
-        showToast("서버 동기화에 실패했습니다.");
+        showToast("서버 동기화에 실패했습니다. 기존 목록을 유지합니다.");
       }
     }
 
@@ -1498,13 +1575,51 @@
         .replaceAll("'", "&#039;");
     }
 
+    // 한글 IME로 입력되어도 같은 두벌식 키의 영문 코드로 변환합니다.
+    // 데스크톱 OS의 한/영 상태는 웹 페이지에서 직접 바꿀 수 없습니다.
+    function koreanKeysToEnglish(value) {
+      const initials = ["r", "R", "s", "e", "E", "f", "a", "q", "Q", "t", "T", "d", "w", "W", "c", "z", "x", "v", "g"];
+      const vowels = ["k", "o", "i", "O", "j", "p", "u", "P", "h", "hk", "ho", "hl", "y", "n", "nj", "np", "nl", "b", "m", "ml", "l"];
+      const finals = ["", "r", "R", "rt", "s", "sw", "sg", "e", "f", "fr", "fa", "fq", "ft", "fx", "fv", "fg", "a", "q", "qt", "t", "T", "d", "w", "c", "z", "x", "v", "g"];
+      const jamo = "ㅂ:q,ㅈ:w,ㄷ:e,ㄱ:r,ㅅ:t,ㅛ:y,ㅕ:u,ㅑ:i,ㅐ:o,ㅔ:p,ㅁ:a,ㄴ:s,ㅇ:d,ㄹ:f,ㅎ:g,ㅗ:h,ㅓ:j,ㅏ:k,ㅣ:l,ㅋ:z,ㅌ:x,ㅊ:c,ㅍ:v,ㅠ:b,ㅜ:n,ㅡ:m,ㅃ:Q,ㅉ:W,ㄸ:E,ㄲ:R,ㅆ:T,ㅒ:O,ㅖ:P,ㄳ:rt,ㄵ:sw,ㄶ:sg,ㄺ:fr,ㄻ:fa,ㄼ:fq,ㄽ:ft,ㄾ:fx,ㄿ:fv,ㅀ:fg,ㅄ:qt,ㅘ:hk,ㅙ:ho,ㅚ:hl,ㅝ:nj,ㅞ:np,ㅟ:nl,ㅢ:ml";
+      const map = Object.fromEntries(jamo.split(",").map(item => item.split(":")));
+      return Array.from(value, ch => {
+        const cp = ch.charCodeAt(0);
+        if (cp >= 0xAC00 && cp <= 0xD7A3) {
+          const n = cp - 0xAC00;
+          return initials[Math.floor(n / 588)] + vowels[Math.floor((n % 588) / 28)] + finals[n % 28];
+        }
+        return map[ch] || ch;
+      }).join("");
+    }
+
     window.addEventListener("DOMContentLoaded", () => {
       const accessInput = document.getElementById("accessCode");
 
       if (accessInput) {
+        const feedback = document.getElementById("codeInputFeedback");
+        const showCodeFeedback = () => {
+          if (feedback) feedback.textContent = accessInput.value
+            ? `입력 중: ${"*".repeat(accessInput.value.length)}`
+            : "접근 코드를 입력하면 * 표시로 나타납니다.";
+        };
+        const normalizeAccessCode = () => {
+          const converted = koreanKeysToEnglish(accessInput.value);
+          if (converted !== accessInput.value) {
+            accessInput.value = converted;
+          }
+          showCodeFeedback();
+        };
+        accessInput.addEventListener("input", event => {
+          if (!event.isComposing) normalizeAccessCode();
+        });
+        accessInput.addEventListener("compositionend", normalizeAccessCode);
+        showCodeFeedback();
         accessInput.addEventListener("keydown", event => {
           if (event.key === "Enter") {
+            if (event.isComposing) return;
             event.preventDefault();
+            normalizeAccessCode();
             login();
           }
         });
